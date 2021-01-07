@@ -1,8 +1,9 @@
 import { ApolloLink, execute } from 'apollo-link'
 import { parseHeaders } from '../../components/Playground/util/parseHeaders'
-import { SubscriptionClient } from 'subscriptions-transport-ws'
+// import { SubscriptionClient } from 'subscriptions-transport-ws'
+import { createClient, Client } from 'graphql-ws'
 import { HttpLink } from 'apollo-link-http'
-import { WebSocketLink } from 'apollo-link-ws'
+// import { WebSocketLink } from 'apollo-link-ws'
 import { isSubscription } from '../../components/Playground/util/hasSubscription'
 import {
   takeLatest,
@@ -39,6 +40,63 @@ import { addHistoryItem } from '../history/actions'
 import { safely } from '../../utils'
 import { set } from 'immutable'
 
+
+
+
+
+// Danny copy paste from graphql-ws readme
+import { Operation, FetchResult, Observable } from '@apollo/client';
+import { print, GraphQLError } from 'graphql';
+
+class WebSocketLink extends ApolloLink {
+  private client: Client;
+
+  constructor(client: Client) {
+    super();
+    this.client = client;
+  }
+
+  public request(operation: Operation): Observable<FetchResult> {
+    return new Observable((sink) => {
+      return this.client.subscribe<FetchResult>(
+        { ...operation, query: print(operation.query) },
+        {
+          next: sink.next.bind(sink),
+          complete: sink.complete.bind(sink),
+          error: (err) => {
+            if (err instanceof Error) {
+              sink.error(err);
+            } else if (err instanceof CloseEvent) {
+              sink.error(
+                new Error(
+                  `Socket closed with event ${err.code}` + err.reason
+                    ? `: ${err.reason}` // reason will be available on clean closes
+                    : '',
+                ),
+              );
+            } else {
+              sink.error(
+                new Error(
+                  (err as GraphQLError[])
+                    .map(({ message }) => message)
+                    .join(', '),
+                ),
+              );
+            }
+          },
+        },
+      );
+    });
+  }
+}
+
+
+
+
+
+
+
+
 // tslint:disable
 let subscriptionEndpoint
 
@@ -59,7 +117,8 @@ export interface Headers {
 export const defaultLinkCreator = (
   session: LinkCreatorProps,
   subscriptionEndpoint?: string,
-): { link: ApolloLink; subscriptionClient?: SubscriptionClient } => {
+  // ): { link: ApolloLink; subscriptionClient?: SubscriptionClient } => {
+): { link: ApolloLink; subscriptionClient?: Client } => {
   let connectionParams = {}
   const { headers, credentials } = session
 
@@ -77,13 +136,15 @@ export const defaultLinkCreator = (
     return { link: httpLink }
   }
 
-  const subscriptionClient = new SubscriptionClient(subscriptionEndpoint, {
-    timeout: 20000,
-    lazy: true,
-    connectionParams,
-  })
-
-  const webSocketLink = new WebSocketLink(subscriptionClient)
+    // const subscriptionClient = new SubscriptionClient(subscriptionEndpoint, {
+    const subscriptionClient = createClient({
+        url: subscriptionEndpoint,
+        // timeout: 20000,
+        lazy: true,
+        connectionParams,
+    })
+    
+    const webSocketLink = new WebSocketLink(subscriptionClient)
   return {
     link: ApolloLink.split(
       operation => isSubscription(operation),
@@ -143,7 +204,8 @@ function* runQuerySaga(action) {
   const channel = eventChannel(emitter => {
     let closed = false
     if (subscriptionClient && operationIsSubscription) {
-      subscriptionClient.onDisconnected(() => {
+        // subscriptionClient.onDisconnected(() => {
+      subscriptionClient.on("closed", () => {
         closed = true
         emitter({
           error: new Error(
